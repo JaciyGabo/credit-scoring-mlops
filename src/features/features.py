@@ -17,6 +17,11 @@ from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
+from src.features.transformers import (
+    FEATURE_COLS, INCOME_IDX, DEPENDENTS_IDX,
+    RestoreColumnOrder, FeatureEngineer, SelectiveScaler,
+)
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -37,104 +42,6 @@ PIPELINE_PATH = Path("data/processed/preprocessing_pipeline.joblib")
 TARGET_COLUMN = "SeriousDlqin2yrs"
 RANDOM_STATE = 42
 TEST_SIZE = 0.2
-
-FEATURE_COLS = [
-    "RevolvingUtilizationOfUnsecuredLines",
-    "age",
-    "NumberOfTime30-59DaysPastDueNotWorse",
-    "DebtRatio",
-    "MonthlyIncome",
-    "NumberOfOpenCreditLinesAndLoans",
-    "NumberOfTimes90DaysLate",
-    "NumberRealEstateLoansOrLines",
-    "NumberOfTime60-89DaysPastDueNotWorse",
-    "NumberOfDependents",
-]
-
-INCOME_IDX = FEATURE_COLS.index("MonthlyIncome")       # 4
-DEPENDENTS_IDX = FEATURE_COLS.index("NumberOfDependents")  # 9
-
-
-# ---------------------------------------------------------------------------
-# Custom transformers
-# ---------------------------------------------------------------------------
-class RestoreColumnOrder(BaseEstimator, TransformerMixin):
-    """
-    ColumnTransformer puts named-transform columns first, then remainder.
-    This restores the original FEATURE_COLS order so FeatureEngineer
-    can reference columns by their expected position.
-    """
-
-    def __init__(self, imputed_indices: list[int], total_cols: int):
-        self.imputed_indices = imputed_indices
-        self.total_cols = total_cols
-
-    def fit(self, X, y=None):
-        remainder = [i for i in range(self.total_cols) if i not in self.imputed_indices]
-        shuffled = self.imputed_indices + remainder
-        self.restore_order_ = [shuffled.index(i) for i in range(self.total_cols)]
-        return self
-
-    def transform(self, X):
-        return X[:, self.restore_order_]
-
-
-class FeatureEngineer(BaseEstimator, TransformerMixin):
-    """
-    Creates derived features. Runs AFTER imputation so MonthlyIncome
-    has no nulls — LogMonthlyIncome and the original imputed value
-    are now fully consistent.
-    """
-
-    def fit(self, X, y=None):
-        return self  # stateless
-
-    def transform(self, X):
-        df = pd.DataFrame(X, columns=FEATURE_COLS)
-
-        # Sum of all delinquency buckets
-        df["TotalLatePayments"] = (
-            df["NumberOfTime30-59DaysPastDueNotWorse"]
-            + df["NumberOfTimes90DaysLate"]
-            + df["NumberOfTime60-89DaysPastDueNotWorse"]
-        )
-
-        # Log transform — consistent with imputed MonthlyIncome (no more fillna(0))
-        df["LogMonthlyIncome"] = np.log1p(df["MonthlyIncome"])
-
-        # Ordinal age bin — NOT scaled downstream
-        df["AgeBin"] = pd.cut(
-            df["age"],
-            bins=[0, 30, 50, 70, 120],
-            labels=[0, 1, 2, 3],
-        ).astype(float)
-
-        return df.values
-
-    def get_feature_names_out(self, input_features=None):
-        return FEATURE_COLS + ["TotalLatePayments", "LogMonthlyIncome", "AgeBin"]
-
-
-class SelectiveScaler(BaseEstimator, TransformerMixin):
-    """
-    Scales only continuous features.
-    AgeBin (ordinal, last column) is passed through unchanged to preserve
-    interpretability in linear models and avoid distorting tree splits.
-    """
-
-    def __init__(self, skip_last_n: int = 1):
-        self.skip_last_n = skip_last_n
-        self.scaler = StandardScaler()
-
-    def fit(self, X, y=None):
-        self.scaler.fit(X[:, : -self.skip_last_n])
-        self.n_features_in_ = X.shape[1]
-        return self
-
-    def transform(self, X):
-        X = X.copy().astype(float)
-        X[:, : -self.skip_last_n] = self.scaler.transform(X[:, : -self.skip_last_n])
-        return X
 
 
 # ---------------------------------------------------------------------------
