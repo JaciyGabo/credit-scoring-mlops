@@ -12,6 +12,7 @@ import mlflow.sklearn
 import numpy as np
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
+from contextlib import asynccontextmanager
 
 import src.features.transformers  # noqa: F401 — registers classes for joblib
 
@@ -45,8 +46,6 @@ app = FastAPI(
 model = None
 pipeline = None
 
-
-@app.on_event("startup")
 async def load_model() -> None:
     global model, pipeline
 
@@ -60,6 +59,17 @@ async def load_model() -> None:
     model = mlflow.sklearn.load_model(model_uri)
     logger.info("Model loaded.")
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await load_model()
+    yield
+
+app = FastAPI(
+    title="Credit Scoring API",
+    description="Predicts probability of financial distress in the next 2 years.",
+    version="0.1.0",
+    lifespan=lifespan,
+)
 
 # ---------------------------------------------------------------------------
 # Schemas
